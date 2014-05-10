@@ -1,0 +1,138 @@
+1. 下载（asterisk 12.1.1），不要直接用asterisk主干版本
+注：asterisk12的chan_sip模块还依赖libssl-dev(ubuntu默认是没安装的)
+
+2. 在 http://scribblej.com/svn/client-head 下载res_sphinx_speech.c和speech_sphinx.h两个文件，把speech_sphinx.h放到
+asterisk源码目录下的include/asterisk下，把res_sphinx_speech.c放到asterisk源码目录下的res目录下，直接编译是通不过的，
+需要修改代码中错误，具体修改见res_sphinx_speech.c和speech_sphinx.h文件(修改的地方都已标注)。
+编译并安装asterisk。
+
+3. 在${ASTERISK_INSTALL_DIR}/etc/asterisk配置目录添加sphinx.conf文件，具体内容如下：
+[general]
+;ip and port of server
+serverip=127.0.0.1
+serverport=10069
+;silence detection is performed by Asterisk DSP, how long to wait before we consider speech finished.
+silencetime=250
+;noiseframes; only here for troublehooting, leave set to 0
+noiseframes=0
+;threshold defines how 'quiet' silence is, try raising to higher numbers if speech is detected too early
+silencethreshold=500
+
+4. 在modules.conf中去掉通用语音引擎注释
+修改前：
+;preload => res_speech.so
+修改后：
+preload => res_speech.so
+
+5. 编译sphinxbase
+cd sphinxbase-0.8
+./configure --prefix=/opt/sphinx
+make install
+
+6. 编译pocketsphinx
+cd pocketsphinx-0.8
+./configure --prefix=/opt/sphinx
+make install
+
+7. 编译astsphinx_server
+
+echo "/opt/sphinx/lib/" > /etc/ld.so.conf.d/sphinx.conf
+ldconfig -v
+export PKG_CONFIG_PATH=$PKG_CONFIG_PATH:/opt/sphinx/lib/pkgconfig
+
+在http://scribblej.com/svn点击Server code in .tgz format的链接，下载文件server.tgz，解压目录名为server，
+我把server改名为astsphinx_server
+
+cd astsphinx_server
+
+astsphinx_server默认的Makefile是有问题的，需要修改，具体要修改的地方如下，修改后的Makefile见附件：
+astsphinx: astsphinx.o prefork.o                                                                           
+        $(CC) `pkg-config pocketsphinx --cflags` -o astsphinx astsphinx.o prefork.o `pkg-config pocketsphinx --libs` 
+                                                                                                           
+sphx_test: sphx_test.c                                                                                     
+        $(CC) `pkg-config pocketsphinx --cflags` -o sphx_test sphx_test.c `pkg-config pocketsphinx --libs`
+make
+make install
+
+8. 创建测试文件
+a. 创建测试词组文件(jiaofei.txt)，内容为:
+充值
+成功
+失败
+欢迎
+移动
+用户
+您好
+重新
+输入
+密码
+验证
+
+b. 从/opt/sphinx/share/pocketsphinx/model/lm/zh_CN/mandarin_notone.dic这个比较全面的字典中找出需要的词组，制作出字典(jiaofei.dic)，内容如下：：
+充值 ch ong zh ib
+成功 ch eng g ong
+失败 sh ib b ai 
+欢迎 h uan y ing
+移动 y i d ong
+用户 y ong h u
+您好 n in h ao 
+重新 ch ong x in 
+输入 sh u r u
+密码 m i m a
+验证 y an zh eng
+
+c. 用jiaofei.txt文件，通过在线工具http://www.speech.cs.cmu.edu/tools/lmtool-new.html
+生成对应的语言模型文件jiaofei.lm(或见附件)
+
+9. Asterisk dialplan配置
+在默认的extensions.conf中添加如下内容，识别的逻辑主要通过这段dialplan来实现：
+[macro-speech]
+exten => s,1,Answer()
+exten => s,n,SpeechCreate(Sphinx)
+exten => s,n,AGI(say.pl|'Welcome to the Sphinx and Asterisk integration test.')
+exten => s,n,AGI(say.pl|'Please say chongzhi.'|1|yornprompt)
+exten => s,n,SpeechStart()
+exten => s,n,SpeechBackground(shuru.wav|13)
+exten => s,n,Log(NOTICE,${SPEECH_TEXT(0)})
+exten => s,n,AGI(say.pl|'You said: ${SPEECH_TEXT(0)}')
+exten => s,n,Goto(3)
+
+[chongzhi]
+exten => 6000,1,Macro(speech) ; 拨打6000，进入语音识别业务
+
+
+10. 测试步骤
+a. 运行asterisk，确认res_speech.so和res_speech_sphinx.so模块已加载
+
+b. 为了方便，直接把/opt/sphinx/share/pocketsphinx/model/hmm/zh/目录下的tdt_sc_8k声学模型目录拷贝到astsphinx_server目录(如我的目录：~/astsphinx_server)下:
+cp /opt/sphinx/share/pocketsphinx/model/hmm/zh/*  ~/astsphinx_server
+
+c. cd ~/astsphinx_server目录，创建astsphinx_server的配置文件, 我命名为configfile, 内容如下:
+-hmm                                                                                                                                                                                          
+./tdt_sc_8k
+-dict
+jiaofei.dic
+-lm
+jiaofei.lm
+-samprate
+8000
+-frate
+50
+-silprob
+0.005
+
+c. 把前面生成的jiaofei.dic和jiaofei.lm文件拷贝到astsphinx_server目录，执行:
+./astsphinx 10069 ./configfile
+
+d. 在sip.conf中配置一个sip用户，并注册上去，拨打6000号码，开始循环语音识别过程。(完)
+
+
+附注------------------------------------------------------------------------------
+如果执行过程中有如下错误信息：
+ad_oss.c(103): Failed to open audio device(/dev/dsp): No such file or directory
+FATAL_ERROR: "continuous.c", line 246: Failed to open audio device
+
+解决办法：
+sudo apt-get install libpulse-dev
+重新编译sphinxbase
+

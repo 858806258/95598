@@ -1,0 +1,12 @@
+-hmm
+tdt_sc_8k
+-dict
+./95598.dic
+-lm
+./95598.lm
+-samprate
+8000
+-frate
+50
+-silprob
+0.005
